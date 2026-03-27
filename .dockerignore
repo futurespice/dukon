@@ -1,0 +1,56 @@
+# DEVOPS FIX #3: .dockerignore prevents sensitive and unnecessary files from
+# being sent to the Docker build context and ending up inside the image.
+# Without this, 'COPY . .' in the Dockerfile includes .env, .git, .venv,
+# dump.rdb, __pycache__, and .idea — inflating the image and potentially
+# leaking secrets baked into the layer.
+
+# Git history — large, not needed at runtime
+.git
+.gitignore
+
+# Secrets — MUST NOT be baked into the image
+.env
+# .env.example is safe to include (no real credentials)
+
+# Python cache / compiled bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Redis dump — may contain live cache data (2FA tokens, codes)
+dump.rdb
+
+# IDE metadata
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# Test / coverage outputs
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Node (if any frontend tooling exists)
+node_modules/
+
+# Docs (not needed at runtime)
+*.md
+docs/
+
+# Local media uploads (mounted as a volume in production, not baked in)
+media/

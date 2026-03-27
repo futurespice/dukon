@@ -1,0 +1,16 @@
+# Development-only dependencies.
+# Install with: pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+# AUDIT-3 DEVOPS FIX #11: Moved from requirements.txt — dev tool only.
+django-extensions==3.2.3
+
+# Testing
+flake8>=7.0
+pytest>=8.0
+pytest-django>=4.8
+pytest-cov>=5.0
+
+# Debug
+ipython>=8.0

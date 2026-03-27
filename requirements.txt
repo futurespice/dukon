@@ -1,0 +1,55 @@
+amqp==5.3.1
+asgiref==3.11.1
+attrs==25.4.0
+billiard==4.2.4
+celery==5.4.0
+django-celery-beat==2.9.0
+certifi==2026.2.25
+charset-normalizer==3.4.5
+click==8.3.1
+click-didyoumean==0.3.1
+click-plugins==1.1.1.2
+click-repl==0.3.0
+Django==6.0
+django-cors-headers==4.4.0
+# AUDIT-3 DEVOPS FIX #11: django-extensions moved to requirements-dev.txt.
+# Dev-only tool (shell_plus, runserver_plus) — not needed in production image.
+django-filter==24.3
+django-phonenumber-field==7.3.0
+django-redis==5.4.0
+djangorestframework==3.15.2
+djangorestframework-simplejwt==5.3.1
+drf-spectacular==0.29.0
+# DEVOPS FIX #19: removed drf-yasg==1.21.7 — unused dead dependency.
+gunicorn==23.0.0
+idna==3.11
+inflection==0.5.1
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+kombu==5.6.2
+packaging==26.0
+phonenumbers==8.13.47
+pillow==11.0.0
+prompt_toolkit==3.0.52
+psycopg2-binary==2.9.10
+PyJWT==2.12.0
+python-dateutil==2.9.0.post0
+python-decouple==3.8
+pytz==2026.1.post1
+PyYAML==6.0.3
+redis==5.2.0
+referencing==0.37.0
+requests==2.32.3
+rpds-py==0.30.0
+sentry-sdk==2.55.0
+# AUDIT HYGIENE FIX: removed six==1.17.0 — Python 2/3 compatibility shim,
+# officially deprecated and irrelevant on Python 3.13 + Django 6.0.
+# No direct imports of 'six' exist anywhere in this codebase.
+# It remains a transitive dependency of python-dateutil and will still
+# be installed by pip as needed; we just stop pinning it explicitly.
+sqlparse==0.5.5
+tzdata==2025.3
+uritemplate==4.2.0
+urllib3==2.6.3
+vine==5.1.0
+wcwidth==0.6.0

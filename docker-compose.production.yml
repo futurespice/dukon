@@ -1,0 +1,239 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+        reservations:
+          memory: 256m
+    # DEVOPS FIX #7: no exposed ports in production — db is only reachable
+    # inside the internal backend network, not from the host.
+    networks:
+      - backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    # DEVOPS FIX #7: require a password; set REDIS_PASSWORD in .env.
+    # Redis is on the internal backend network so it is not reachable from
+    # outside the host, but defence-in-depth requires a password as well.
+    command: >
+      redis-server
+      --save 60 1
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+        reservations:
+          memory: 64m
+    networks:
+      - backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # DEVOPS FIX #6: migrations are extracted from the web CMD into a one-shot
+  # container that runs first.  If migrations fail the web container never
+  # starts, so gunicorn never serves a broken schema.  This also enables
+  # rollback: revert the image tag and re-run the migrate container.
+  migrate:
+    image: ${DOCKER_IMAGE:-dukon-backend}:${IMAGE_TAG:-latest}
+    restart: "no"
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DB_HOST: db
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    # AUDIT-3 DEVOPS FIX #2: Add timeout to prevent hanging forever on locks.
+    # AUDIT-3 FIX #11: Register periodic tasks after migrations.
+    # AUDIT-3 DEVOPS FIX #6: Collect static here once instead of in web CMD.
+    command: >-
+      sh -c
+      "timeout 300 python manage.py migrate --noinput &&
+      python manage.py setup_periodic_tasks &&
+      cp -r /app/staticfiles/. /var/www/static/"
+    volumes:
+      - static_data:/var/www/static
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+
+  web:
+    image: ${DOCKER_IMAGE:-dukon-backend}:${IMAGE_TAG:-latest}
+    restart: always
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DB_HOST: db
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-4}
+    volumes:
+      - media_data:/app/media
+      - static_data:/var/www/static
+    # AUDIT-3 DEVOPS FIX #6: Static files are now copied in the migrate init
+    # container, so web just starts gunicorn — no I/O delay on every restart.
+    command: gunicorn config.wsgi:application --config gunicorn.conf.py
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # DEVOPS FIX #13: health check so nginx and compose know when gunicorn is ready.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+        reservations:
+          memory: 256m
+    networks:
+      - backend
+      - frontend
+    # DEVOPS FIX #15: cap log size so the disk doesn't fill up silently.
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  celery:
+    image: ${DOCKER_IMAGE:-dukon-backend}:${IMAGE_TAG:-latest}
+    restart: always
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DB_HOST: db
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    command: celery -A config worker -l warning -Q default,urgent --concurrency=4
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+        reservations:
+          memory: 128m
+    networks:
+      - backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # DEVOPS FIX #5: celery-beat was missing from production — periodic tasks
+  # (expired code cleanup, tariff reminders, etc.) never ran.
+  celery-beat:
+    image: ${DOCKER_IMAGE:-dukon-backend}:${IMAGE_TAG:-latest}
+    restart: always
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DB_HOST: db
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    command: celery -A config beat -l warning --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+        reservations:
+          memory: 64m
+    networks:
+      - backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: always
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - static_data:/var/www/static:ro
+      - media_data:/var/www/media:ro
+      # DEVOPS FIX #1: mount Let's Encrypt certificates so nginx can actually
+      # serve HTTPS. Without this volume the container fails to start because
+      # the ssl_certificate paths in nginx.conf don't exist.
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      web:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+        reservations:
+          memory: 32m
+    networks:
+      - frontend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:
+  static_data:
+
+networks:
+  backend:
+    internal: true
+  frontend:

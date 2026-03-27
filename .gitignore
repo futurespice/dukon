@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+lib/
+lib64/
+wheels/
+*.whl
+*.manifest
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# Django
+*.log
+local_settings.py
+staticfiles/
+media/
+
+# Environment variables — NEVER commit real secrets
+.env
+# Allow the example file so onboarding works
+!.env.example
+
+# SMALL FIX #26: Redis dump contains live cache data (2FA tokens,
+# verification codes, phone_change keys). Must not be committed.
+dump.rdb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test / coverage
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Docker build artefacts
+*.pid

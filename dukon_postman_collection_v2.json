@@ -1,0 +1,1004 @@
+{
+  "info": {
+    "name": "Dukon Online API — Full Collection",
+    "description": "Complete API collection for Dukon Online multi-tenant SaaS e-commerce platform.\nBase URL: {{base_url}}\nAuth: Bearer JWT (users) | Token UUID (employees)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "dukon-api-2025"
+  },
+  "variable": [
+    {"key": "base_url", "value": "http://localhost:8000/api/v1", "type": "string"},
+    {"key": "root_url", "value": "http://localhost:8000", "type": "string"},
+    {"key": "access_token", "value": "", "type": "string"},
+    {"key": "refresh_token", "value": "", "type": "string"},
+    {"key": "two_fa_token", "value": "", "type": "string"},
+    {"key": "employee_token", "value": "", "type": "string"},
+    {"key": "store_uuid", "value": "", "type": "string"},
+    {"key": "order_id", "value": "", "type": "string"},
+    {"key": "product_id", "value": "", "type": "string"},
+    {"key": "employee_id", "value": "", "type": "string"}
+  ],
+  "item": [
+    {
+      "name": "🏥 Health",
+      "item": [
+        {
+          "name": "Health Check (shallow)",
+          "request": {"method": "GET", "url": "{{root_url}}/health/"},
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "pm.test('Body ok', () => { const b = pm.response.json(); pm.expect(b.status).to.eql('ok'); });"
+          ]}}]
+        },
+        {
+          "name": "Health Check (deep — DB + Redis)",
+          "request": {"method": "GET", "url": "{{root_url}}/health/deep/"},
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200 or 503', () => { pm.expect([200,503]).to.include(pm.response.code); });",
+            "pm.test('Has database field', () => { pm.expect(pm.response.json()).to.have.property('database'); });",
+            "pm.test('Has cache field', () => { pm.expect(pm.response.json()).to.have.property('cache'); });"
+          ]}}]
+        }
+      ]
+    },
+    {
+      "name": "🔑 Smoke Login",
+      "description": "Minimal auth for smoke/full runs.\nPrerequisite: python manage.py create_smoke_data",
+      "item": [
+        {
+          "name": "Smoke — Login (no 2FA)",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/accounts/login/",
+            "body": {"mode": "raw", "raw": "{\"phone\": \"+996700000001\", \"password\": \"SmokePass123!\"}"}
+          },
+          "event": [
+            {"listen": "prerequest", "script": {"exec": [
+              "pm.collectionVariables.set('access_token', '');",
+              "pm.collectionVariables.set('refresh_token', '');"
+            ]}},
+            {"listen": "test", "script": {"exec": [
+              "pm.test('Smoke login: Status 200', () => pm.response.to.have.status(200));",
+              "const b = pm.response.json();",
+              "pm.test('Has access token', () => { pm.expect(b).to.have.property('access').that.is.a('string'); });",
+              "if (b['2fa_required']) {",
+              "  pm.test('FAIL — 2FA enabled on smoke user', () => { pm.expect.fail('Run: python manage.py create_smoke_data --reset'); });",
+              "} else if (b.access) {",
+              "  pm.collectionVariables.set('access_token', b.access);",
+              "  pm.collectionVariables.set('refresh_token', b.refresh || '');",
+              "  console.log('Smoke login OK');",
+              "}"
+            ]}}
+          ]
+        },
+        {
+          "name": "Smoke — Pre-seed store_uuid",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/stores/"
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "const stores = Array.isArray(b) ? b : (b.results || []);",
+            "const mine = stores.find(s => s.uuid);",
+            "if (mine && mine.uuid) { pm.collectionVariables.set('store_uuid', mine.uuid); console.log('store_uuid:', mine.uuid); }",
+            "else { console.warn('No store — run: python manage.py create_smoke_data'); }"
+          ]}}]
+        },
+        {
+          "name": "Smoke — Pre-seed product_id",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/products/?store={{store_uuid}}&ordering=-created_at"
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "const prods = Array.isArray(b) ? b : (b.results || []);",
+            "if (prods.length > 0) {",
+            "  pm.collectionVariables.set('product_id', prods[0].id);",
+            "  const models = prods[0].models || prods[0].product_models || [];",
+            "  if (models.length > 0) pm.collectionVariables.set('product_model_id', models[0].id);",
+            "  console.log('product_id:', prods[0].id);",
+            "} else { console.warn('No products — run: python manage.py create_smoke_data'); }"
+          ]}}]
+        }
+      ]
+    },
+    {
+      "name": "🔐 Auth — Accounts",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/accounts/register/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone\": \"+996555123456\",\n  \"password\": \"StrongPass123!\",\n  \"first_name\": \"Азат\",\n  \"last_name\": \"Мурзаев\"\n}"}
+          },
+          "event": [
+            {"listen": "prerequest", "script": {"exec": ["pm.request.headers.upsert({ key: 'Idempotency-Key', value: 'reg-' + Date.now() });"]
+            }},
+            {"listen": "test", "script": {"exec": [
+              "pm.test('Status 201 Created', () => pm.response.to.have.status(201));",
+              "const b = pm.response.json();",
+              "pm.test('Has detail message', () => pm.expect(b).to.have.property('detail'));",
+              "pm.test('No JWT on register', () => { pm.expect(b).to.not.have.property('access'); });",
+              "pm.test('No password in response', () => pm.expect(b).to.not.have.property('password'));"
+            ]}}
+          ]
+        },
+        {
+          "name": "Verify Registration Code",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/accounts/check/verify-code/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone\": \"+996555123456\",\n  \"code\": \"1234\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "pm.test('Has access token', () => pm.expect(b).to.have.property('access').that.is.a('string').with.length.above(10));",
+            "pm.test('No password in response', () => pm.expect(b).to.not.have.property('password'));",
+            "if (b.access) { pm.collectionVariables.set('access_token', b.access); pm.collectionVariables.set('refresh_token', b.refresh); }"
+          ]}}]
+        },
+        {
+          "name": "Resend Verify Code",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/accounts/resend-verify-code/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone\": \"+996555123456\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "pm.test('Has detail', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+          ]}}]
+        },
+        {
+          "name": "Login (no 2FA)",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/accounts/login/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone\": \"+996555123456\",\n  \"password\": \"StrongPass123!\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "if (b.access) {",
+            "  pm.collectionVariables.set('access_token', b.access);",
+            "  pm.collectionVariables.set('refresh_token', b.refresh);",
+            "} else if (b['2fa_required']) {",
+            "  pm.collectionVariables.set('two_fa_token', b.two_fa_token);",
+            "}"
+          ]}}]
+        },
+        {
+          "name": "2FA Confirm",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/accounts/login/2fa/confirm/",
+            "body": {"mode": "raw", "raw": "{\n  \"two_fa_token\": \"{{two_fa_token}}\",\n  \"code\": \"4567\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "pm.test('Has access', () => pm.expect(b).to.have.property('access'));",
+            "pm.collectionVariables.set('access_token', b.access);",
+            "pm.collectionVariables.set('refresh_token', b.refresh);"
+          ]}}]
+        },
+        {
+          "name": "2FA Resend",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/accounts/login/2fa/resend/",
+            "body": {"mode": "raw", "raw": "{\n  \"two_fa_token\": \"{{two_fa_token}}\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "2FA Enable",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/accounts/2fa/enable/",
+            "body": {"mode": "raw", "raw": "{\n  \"password\": \"StrongPass123!\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "pm.test('2FA enabled message', () => pm.expect(pm.response.json().detail).to.include('включена'));"
+          ]}}]
+        },
+        {
+          "name": "2FA Disable",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/accounts/2fa/disable/",
+            "body": {"mode": "raw", "raw": "{\n  \"password\": \"StrongPass123!\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/accounts/logout/",
+            "body": {"mode": "raw", "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "if (!pm.collectionVariables.get('_smoke_mode')) {",
+            "  pm.collectionVariables.set('access_token', '');",
+            "  pm.collectionVariables.set('refresh_token', '');",
+            "}"
+          ]}}]
+        },
+        {
+          "name": "Reset Password — Send Code",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/accounts/reset-password/send-code/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone\": \"+996555123456\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "pm.test('Safe response', () => pm.expect(pm.response.json().detail).to.include('WhatsApp'));"
+          ]}}]
+        },
+        {
+          "name": "Reset Password — Confirm",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/accounts/reset-password/confirm/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone\": \"+996555123456\",\n  \"code\": \"1234\",\n  \"new_password\": \"NewStrongPass456!\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "if (b.access) { pm.collectionVariables.set('access_token', b.access); pm.collectionVariables.set('refresh_token', b.refresh); }"
+          ]}}]
+        }
+      ]
+    },
+    {
+      "name": "👤 Profile",
+      "item": [
+        {
+          "name": "Get Profile",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}], "url": "{{base_url}}/accounts/profile/"},
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "pm.test('Has phone', () => pm.expect(pm.response.json()).to.have.property('phone'));",
+            "pm.test('No password in response', () => pm.expect(pm.response.json()).to.not.have.property('password'));"
+          ]}}]
+        },
+        {
+          "name": "Update Profile (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/accounts/profile/",
+            "body": {"mode": "raw", "raw": "{\n  \"first_name\": \"Азат\",\n  \"last_name\": \"Мурзаев\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/accounts/change-password/",
+            "body": {"mode": "raw", "raw": "{\n  \"old_password\": \"StrongPass123!\",\n  \"new_password\": \"NewStrongPass456!\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "pm.test('New tokens issued', () => { pm.expect(b).to.have.property('access'); });",
+            "pm.collectionVariables.set('access_token', b.access);",
+            "pm.collectionVariables.set('refresh_token', b.refresh);"
+          ]}}]
+        },
+        {
+          "name": "Delete Account (soft)",
+          "request": {
+            "method": "DELETE",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/accounts/profile/",
+            "body": {"mode": "raw", "raw": "{\n  \"password\": \"StrongPass123!\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 204', () => pm.response.to.have.status(204));"]}}]
+        }
+      ]
+    },
+    {
+      "name": "🏪 Stores",
+      "item": [
+        {
+          "name": "List Stores (public)",
+          "request": {"method": "GET", "url": "{{base_url}}/stores/"},
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "pm.test('Is array or paginated', () => { const b = pm.response.json(); pm.expect(b.results !== undefined || Array.isArray(b)).to.be.true; });"
+          ]}}]
+        },
+        {
+          "name": "Create Store",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/stores/",
+            "body": {"mode": "raw", "raw": "{\n  \"name\": \"Мой магазин\",\n  \"address\": \"ул. Манаса 40, Бишкек\",\n  \"slug\": \"my-shop-01\",\n  \"description\": \"Лучший магазин в городе\",\n  \"phone_number\": \"+996555000001\",\n  \"theme\": \"1\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 201 Created', () => pm.response.to.have.status(201));",
+            "const b = pm.response.json();",
+            "pm.test('Has uuid', () => { pm.expect(b).to.have.property('uuid'); pm.expect(b.uuid).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i); });",
+            "if (b.uuid) { pm.collectionVariables.set('store_uuid', b.uuid); console.log('store_uuid saved:', b.uuid); }"
+          ]}}]
+        },
+        {
+          "name": "Get Store by Slug",
+          "request": {"method": "GET", "url": "{{base_url}}/stores/by-slug/my-shop-01/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200 or 404', () => pm.expect([200,404]).to.include(pm.response.code));"]}}]
+        },
+        {
+          "name": "Get Store Detail",
+          "request": {"method": "GET", "url": "{{base_url}}/stores/{{store_uuid}}/"},
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "pm.test('Has balance', () => pm.expect(pm.response.json()).to.have.property('balance'));"
+          ]}}]
+        },
+        {
+          "name": "Update Store (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/stores/{{store_uuid}}/",
+            "body": {"mode": "raw", "raw": "{\n  \"description\": \"Обновлённое описание\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "Bulk Delete Stores",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/stores/multiple-delete/",
+            "body": {"mode": "raw", "raw": "{\n  \"ids\": [\"{{store_uuid}}\"]\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200 or 400', () => pm.expect([200,400]).to.include(pm.response.code));"]}}]
+        },
+        {
+          "name": "Activate Promocode",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/stores/balance/set/promocode/",
+            "body": {"mode": "raw", "raw": "{\n  \"code\": \"PROMO2025\",\n  \"store\": \"{{store_uuid}}\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));",
+            "pm.test('200, 400, or 404', () => pm.expect([200, 400, 404]).to.include(pm.response.code));"
+          ]}}]
+        },
+        {
+          "name": "Set Tariff Plan",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/stores/balance/set/tariff-plans/",
+            "body": {"mode": "raw", "raw": "{\n  \"store\": \"{{store_uuid}}\",\n  \"tariff\": \"1\",\n  \"duration_type\": \"1\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));",
+            "pm.test('201, 200, or 400', () => pm.expect([200, 201, 400]).to.include(pm.response.code));"
+          ]}}]
+        },
+        {
+          "name": "List Balance Transactions",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}], "url": "{{base_url}}/stores/balance-transactions/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "Create Slide",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/stores/{{store_uuid}}/slides/",
+            "body": {"mode": "formdata", "formdata": [
+              {"key": "title", "value": "Летняя распродажа", "type": "text"},
+              {"key": "sort_order", "value": "1", "type": "text"},
+              {"key": "image", "type": "file", "src": ""}
+            ]}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 201 or 400', () => pm.expect([201,400,403]).to.include(pm.response.code));"]}}]
+        },
+        {
+          "name": "Set Slide Ordering",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/stores/{{store_uuid}}/slides/set-ordering/",
+            "body": {"mode": "raw", "raw": "{\n  \"slides\": [\n    {\"slide\": 1, \"sort_order\": 0}\n  ]\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        }
+      ]
+    },
+    {
+      "name": "📦 Products",
+      "item": [
+        {
+          "name": "List Products (public)",
+          "request": {"method": "GET", "url": "{{base_url}}/products/?store={{store_uuid}}&ordering=-created_at"},
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "pm.test('Paginated or array', () => pm.expect(b.results !== undefined || Array.isArray(b)).to.be.true);"
+          ]}}]
+        },
+        {
+          "name": "Create Product",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/products/",
+            "body": {"mode": "raw", "raw": "{\n  \"store\": \"{{store_uuid}}\",\n  \"name\": \"Тестовый продукт\",\n  \"short_description\": \"Краткое описание\",\n  \"is_hidden\": false\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 201 Created', () => pm.response.to.have.status(201));",
+            "const b = pm.response.json();",
+            "pm.test('Has numeric id', () => pm.expect(b.id).to.be.a('number'));",
+            "if (b.id) { pm.collectionVariables.set('product_id', b.id); console.log('product_id saved:', b.id); }"
+          ]}}]
+        },
+        {
+          "name": "Product Detail",
+          "request": {"method": "GET", "url": "{{base_url}}/products/{{product_id}}/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200 or 404', () => pm.expect([200,404]).to.include(pm.response.code));"]}}]
+        },
+        {
+          "name": "Bulk Create Products",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/products/bulk-create/",
+            "body": {"mode": "raw", "raw": "[\n  {\"store\": \"{{store_uuid}}\", \"name\": \"Продукт 1\", \"short_description\": \"Описание 1\"},\n  {\"store\": \"{{store_uuid}}\", \"name\": \"Продукт 2\", \"short_description\": \"Описание 2\"}\n]"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 201 or 400', () => pm.expect([201,400]).to.include(pm.response.code));"]}}]
+        },
+        {
+          "name": "Copy Product",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/products/create-copy/",
+            "body": {"mode": "raw", "raw": "{\n  \"product_id\": {{product_id}}\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 201 or 404', () => pm.expect([201, 404]).to.include(pm.response.code));",
+            "if (pm.response.code === 201) { pm.test('Copy is hidden', () => pm.expect(pm.response.json().is_hidden).to.be.true); }"
+          ]}}]
+        },
+        {
+          "name": "Add to Favorites",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/products/favorites/",
+            "body": {"mode": "raw", "raw": "{\n  \"product\": {{product_id}}\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 201 or 400', () => pm.expect([201,400]).to.include(pm.response.code));"]}}]
+        },
+        {
+          "name": "Create ProductModel (variant)",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/products/product-models/",
+            "body": {"mode": "raw", "raw": "{\n  \"product\": {{product_id}},\n  \"name\": \"Размер L\",\n  \"quantity\": 10,\n  \"price\": \"1500.00\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 201 Created', () => pm.response.to.have.status(201));",
+            "const b = pm.response.json();",
+            "pm.test('Price is non-negative decimal', () => pm.expect(parseFloat(b.price)).to.be.gte(0));",
+            "pm.test('Has product reference', () => pm.expect(b).to.have.property('product'));",
+            "if (b.id) pm.collectionVariables.set('product_model_id', b.id);"
+          ]}}]
+        },
+        {
+          "name": "Create Category",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/products/categories/",
+            "body": {"mode": "raw", "raw": "{\n  \"store\": \"{{store_uuid}}\",\n  \"name\": \"Электроника\",\n  \"order\": 1\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 201', () => pm.response.to.have.status(201));",
+            "pm.test('Category belongs to store', () => pm.expect(pm.response.json()).to.have.property('store'));"
+          ]}}]
+        },
+        {
+          "name": "My Products Bulk Create",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/products/my-products/bulk-create/",
+            "body": {"mode": "raw", "raw": "[\n  {\"store\": \"{{store_uuid}}\", \"name\": \"Товар А\", \"short_description\": \"Описание А\"}\n]"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 201 or 400', () => pm.expect([201,400]).to.include(pm.response.code));"]}}]
+        }
+      ]
+    },
+    {
+      "name": "🛒 Orders",
+      "item": [
+        {
+          "name": "Create Order",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/orders/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone_number\": \"+996555123456\",\n  \"first_name\": \"Азат\",\n  \"address\": \"\",\n  \"payment_type\": \"IN_CASH\",\n  \"delivery_type\": \"SELF_PICKUP\",\n  \"items\": [\n    { \"product\": {{product_id}}, \"quantity\": 1 }\n  ]\n}"}
+          },
+          "event": [
+            {"listen": "prerequest", "script": {"exec": ["pm.request.headers.upsert({ key: 'Idempotency-Key', value: 'order-' + Date.now() + '-' + Math.random().toString(36).slice(2) });"]
+            }},
+            {"listen": "test", "script": {"exec": [
+              "pm.test('Status 201 Created', () => pm.response.to.have.status(201));",
+              "const b = pm.response.json();",
+              "pm.test('Has numeric order id', () => pm.expect(b.id).to.be.a('number'));",
+              "pm.test('order_status is IN_PROCESSING', () => pm.expect(b.order_status).to.eql('IN_PROCESSING'));",
+              "if (b.id) { pm.collectionVariables.set('order_id', b.id); console.log('order_id saved:', b.id); }"
+            ]}}
+          ]
+        },
+        {
+          "name": "List Orders (store-owner)",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}], "url": "{{base_url}}/orders/?ordering=-created_at"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "My Orders (buyer)",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}], "url": "{{base_url}}/orders/my/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "Order History (alias)",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}], "url": "{{base_url}}/orders/history/list/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "Track Order (public)",
+          "request": {"method": "GET", "url": "{{base_url}}/orders/track/?order_id={{order_id}}&phone=+996555123456"},
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));",
+            "pm.test('200, 404, 400, or 429', () => pm.expect([200, 404, 400, 429]).to.include(pm.response.code));"
+          ]}}]
+        },
+        {
+          "name": "Order Detail",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}], "url": "{{base_url}}/orders/{{order_id}}/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200 or 404', () => pm.expect([200,404]).to.include(pm.response.code));"]}}]
+        },
+        {
+          "name": "Update Order Status (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/orders/{{order_id}}/",
+            "body": {"mode": "raw", "raw": "{\n  \"order_status\": \"ACCEPTED\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));",
+            "pm.test('200 or 400 (state machine)', () => pm.expect([200, 400]).to.include(pm.response.code));"
+          ]}}]
+        },
+        {
+          "name": "Cancel Order (soft DELETE)",
+          "request": {
+            "method": "DELETE",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/orders/{{order_id}}/"
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200 or 204', () => pm.expect([200, 204]).to.include(pm.response.code));",
+            "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));"
+          ]}}]
+        },
+        {
+          "name": "Upload Payment Check Photo",
+          "request": {
+            "method": "PATCH",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/orders/{{order_id}}/upload-check/",
+            "body": {"mode": "formdata", "formdata": [{"key": "check_photo", "type": "file", "src": ""}]}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200 or 400 or 404', () => pm.expect([200,400,404]).to.include(pm.response.code));"]}}]
+        },
+        {
+          "name": "Bulk Cancel Orders",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/orders/multiple-delete/",
+            "body": {"mode": "raw", "raw": "{\n  \"ids\": [{{order_id}}]\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "pm.test('Has canceled count', () => pm.expect(pm.response.json()).to.have.property('canceled'));"
+          ]}}]
+        }
+      ]
+    },
+    {
+      "name": "👷 Employees",
+      "item": [
+        {
+          "name": "List Employees",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}], "url": "{{base_url}}/employees/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "Create Employee",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/employees/",
+            "body": {"mode": "raw", "raw": "{\n  \"store\": \"{{store_uuid}}\",\n  \"username\": \"cashier001\",\n  \"password\": \"SecureEmp123!\",\n  \"first_name\": \"Сотрудник\",\n  \"last_name\": \"Иванов\",\n  \"position\": \"CASHIER\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 201', () => pm.response.to.have.status(201));",
+            "const b = pm.response.json();",
+            "pm.test('Has id', () => pm.expect(b).to.have.property('id'));",
+            "pm.test('No password in response', () => pm.expect(b).to.not.have.property('password'));",
+            "if (b.id) pm.collectionVariables.set('employee_id', b.id);"
+          ]}}]
+        },
+        {
+          "name": "Employee Login",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/employees/auth/login/",
+            "body": {"mode": "raw", "raw": "{\n  \"username\": \"cashier001\",\n  \"password\": \"SecureEmp123!\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "pm.test('Has UUID token', () => { pm.expect(b).to.have.property('token'); pm.expect(b.token).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i); });",
+            "if (b.token) pm.collectionVariables.set('employee_token', b.token);"
+          ]}}]
+        },
+        {
+          "name": "Employee Logout",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/employees/auth/logout/",
+            "body": {"mode": "raw", "raw": "{\n  \"token\": \"{{employee_token}}\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "pm.collectionVariables.set('employee_token', '');"
+          ]}}]
+        },
+        {
+          "name": "Employee Detail",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}], "url": "{{base_url}}/employees/{{employee_id}}/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200 or 404', () => pm.expect([200,404]).to.include(pm.response.code));"]}}]
+        },
+        {
+          "name": "Bulk Delete Employees",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/employees/multiple-delete/",
+            "body": {"mode": "raw", "raw": "{\n  \"ids\": [{{employee_id}}]\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "pm.test('Has deleted count', () => pm.expect(pm.response.json()).to.have.property('deleted'));"
+          ]}}]
+        }
+      ]
+    },
+    {
+      "name": "🔔 Notifications",
+      "item": [
+        {
+          "name": "List Notifications",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}], "url": "{{base_url}}/notifications/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "Unread Count",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}], "url": "{{base_url}}/notifications/unread-count/"},
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "pm.test('Has unread_count', () => pm.expect(pm.response.json()).to.have.property('unread_count'));"
+          ]}}]
+        },
+        {
+          "name": "Mark All As Read",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}], "url": "{{base_url}}/notifications/mark_all_as_read/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "Bulk Mark Read",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/notifications/bulk-mark-read/",
+            "body": {"mode": "raw", "raw": "{\n  \"ids\": [1, 2, 3]\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200', () => pm.response.to.have.status(200));",
+            "pm.test('Has marked', () => pm.expect(pm.response.json()).to.have.property('marked'));"
+          ]}}]
+        }
+      ]
+    },
+    {
+      "name": "🌍 CountryAPI",
+      "item": [
+        {
+          "name": "List Countries",
+          "request": {"method": "GET", "url": "{{base_url}}/countryapi/countries/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "List Regions",
+          "request": {"method": "GET", "url": "{{base_url}}/countryapi/regions/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        },
+        {
+          "name": "List Cities",
+          "request": {"method": "GET", "url": "{{base_url}}/countryapi/cities/"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]}}]
+        }
+      ]
+    },
+    {
+      "name": "⚡ Race Condition Tests",
+      "item": [
+        {
+          "name": "RC-1: Concurrent Order Creation (same last item)",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}, {"key": "Idempotency-Key", "value": "race-{{$randomInt}}"}],
+            "url": "{{base_url}}/orders/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone_number\": \"+996555123456\",\n  \"first_name\": \"Test\",\n  \"address\": \"\",\n  \"payment_type\": \"IN_CASH\",\n  \"delivery_type\": \"SELF_PICKUP\",\n  \"items\": [{ \"product\": 1, \"quantity\": 1 }]\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));",
+            "pm.test('201 or 400 or 409', () => pm.expect([200,201,400,409]).to.include(pm.response.code));"
+          ]}}]
+        },
+        {
+          "name": "RC-2: Concurrent Status Change",
+          "request": {
+            "method": "PATCH",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/orders/{{order_id}}/",
+            "body": {"mode": "raw", "raw": "{\n  \"order_status\": \"CANCELED\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));",
+            "pm.test('200 or 400', () => pm.expect([200, 400]).to.include(pm.response.code));"
+          ]}}]
+        },
+        {
+          "name": "RC-3: Concurrent Promocode Activation",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/stores/balance/set/promocode/",
+            "body": {"mode": "raw", "raw": "{\n  \"code\": \"PROMO2025\",\n  \"store\": \"{{store_uuid}}\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));",
+            "pm.test('200 or 400', () => pm.expect([200, 400]).to.include(pm.response.code));"
+          ]}}]
+        },
+        {
+          "name": "RC-4: Idempotency Key — Duplicate Order",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}, {"key": "Idempotency-Key", "value": "fixed-key-12345"}],
+            "url": "{{base_url}}/orders/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone_number\": \"+996555123456\",\n  \"first_name\": \"Test\",\n  \"address\": \"\",\n  \"payment_type\": \"IN_CASH\",\n  \"delivery_type\": \"SELF_PICKUP\",\n  \"items\": [{ \"product\": 1, \"quantity\": 1 }]\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 201 or 200', () => pm.expect([200,201]).to.include(pm.response.code));"]}}]
+        }
+      ]
+    },
+    {
+      "name": "🧪 Edge Cases",
+      "item": [
+        {
+          "name": "EDGE-1: Order with empty items",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/orders/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone_number\": \"+996555123456\",\n  \"first_name\": \"Test\",\n  \"address\": \"\",\n  \"payment_type\": \"IN_CASH\",\n  \"delivery_type\": \"SELF_PICKUP\",\n  \"items\": []\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 400', () => pm.response.to.have.status(400));",
+            "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));"
+          ]}}]
+        },
+        {
+          "name": "EDGE-2: Order with duplicate product_ids",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/orders/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone_number\": \"+996555123456\",\n  \"first_name\": \"Test\",\n  \"address\": \"\",\n  \"payment_type\": \"IN_CASH\",\n  \"delivery_type\": \"SELF_PICKUP\",\n  \"items\": [{\"product\": 1, \"quantity\": 1}, {\"product\": 1, \"quantity\": 2}]\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 400 — duplicate product rejected', () => pm.response.to.have.status(400));"]}}]
+        },
+        {
+          "name": "EDGE-3: Delivery requires address",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/orders/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone_number\": \"+996555123456\",\n  \"first_name\": \"Test\",\n  \"address\": \"\",\n  \"payment_type\": \"IN_CASH\",\n  \"delivery_type\": \"DELIVERY\",\n  \"items\": [{\"product\": 1, \"quantity\": 1}]\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 400', () => pm.response.to.have.status(400));"]}}]
+        },
+        {
+          "name": "EDGE-4: Order quantity = 0",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/orders/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone_number\": \"+996555123456\",\n  \"first_name\": \"Test\",\n  \"address\": \"\",\n  \"payment_type\": \"IN_CASH\",\n  \"delivery_type\": \"SELF_PICKUP\",\n  \"items\": [{\"product\": 1, \"quantity\": 0}]\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 400', () => pm.response.to.have.status(400));"]}}]
+        },
+        {
+          "name": "EDGE-5: Invalid phone format",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/accounts/register/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone\": \"89XXXXXXXX\",\n  \"password\": \"test\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 400', () => pm.response.to.have.status(400));"]}}]
+        },
+        {
+          "name": "EDGE-7: Order Track with invalid order_id type",
+          "request": {"method": "GET", "url": "{{base_url}}/orders/track/?order_id=abc&phone=+996555123456"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 400', () => pm.response.to.have.status(400));"]}}]
+        },
+        {
+          "name": "EDGE-8: Order Track with overflow integer",
+          "request": {"method": "GET", "url": "{{base_url}}/orders/track/?order_id=99999999999999999999&phone=+996555123456"},
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));",
+            "pm.test('Status 400', () => pm.response.to.have.status(400));"
+          ]}}]
+        },
+        {
+          "name": "EDGE-14: Change phone via PATCH /profile/ (should be blocked)",
+          "request": {
+            "method": "PATCH",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/accounts/profile/",
+            "body": {"mode": "raw", "raw": "{\"phone\": \"+996700999888\"}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 400', () => pm.response.to.have.status(400));",
+            "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));"
+          ]}}]
+        },
+        {
+          "name": "EDGE-16: Bulk create > 100 products",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/products/bulk-create/"
+          },
+          "event": [
+            {"listen": "prerequest", "script": {"exec": [
+              "const items = [];",
+              "for (let i = 0; i < 101; i++) { items.push({ store: pm.collectionVariables.get('store_uuid'), name: 'BulkProd' + i, short_description: 'desc' }); }",
+              "pm.request.body.raw = JSON.stringify(items);"
+            ]}},
+            {"listen": "test", "script": {"exec": [
+              "pm.test('Status 400', () => pm.response.to.have.status(400));",
+              "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));"
+            ]}}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🔒 Security Tests",
+      "item": [
+        {
+          "name": "SEC-1: Access other user's order (IDOR)",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}], "url": "{{base_url}}/orders/99999/"},
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('IDOR blocked: not 200', () => pm.expect(pm.response.code).to.not.eql(200));",
+            "pm.test('Returns 403 or 404', () => pm.expect([403, 404]).to.include(pm.response.code));"
+          ]}}]
+        },
+        {
+          "name": "SEC-2: Unauthenticated order creation",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/orders/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone_number\": \"+996555000000\",\n  \"first_name\": \"Hack\",\n  \"address\": \"\",\n  \"payment_type\": \"IN_CASH\",\n  \"delivery_type\": \"SELF_PICKUP\",\n  \"items\": [{\"product\": 1, \"quantity\": 1}]\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 401', () => pm.response.to.have.status(401));"]}}]
+        },
+        {
+          "name": "SEC-4: Access other user's store (IDOR)",
+          "request": {
+            "method": "PATCH",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/stores/00000000-0000-0000-0000-000000000000/",
+            "body": {"mode": "raw", "raw": "{\n  \"name\": \"HACKED\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('403 or 404, not 200', () => pm.expect(pm.response.code).to.not.eql(200));"]}}]
+        },
+        {
+          "name": "SEC-5: JWT with expired token",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNjAwMDAwMDAwfQ.fake"}],
+            "url": "{{base_url}}/accounts/profile/"
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Status 401', () => pm.response.to.have.status(401));"]}}]
+        },
+        {
+          "name": "SEC-6: Phone enumeration on reset-password",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": "{{base_url}}/accounts/reset-password/send-code/",
+            "body": {"mode": "raw", "raw": "{\n  \"phone\": \"+996000000000\"\n}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Status 200 (safe for ALL phones)', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json();",
+            "pm.test('No is_registered field', () => { pm.expect(b).to.not.have.property('is_registered'); pm.expect(b).to.not.have.property('exists'); });"
+          ]}}]
+        },
+        {
+          "name": "SEC-7: Create category for foreign store (IDOR create)",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{access_token}}"}],
+            "url": "{{base_url}}/products/categories/",
+            "body": {"mode": "raw", "raw": "{\"store\": \"00000000-0000-0000-0000-000000000001\", \"name\": \"Hacked Category\"}"}
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Not 201', () => pm.expect(pm.response.code).to.not.eql(201));",
+            "pm.test('No 500', () => pm.expect(pm.response.code).to.not.eql(500));"
+          ]}}]
+        }
+      ]
+    }
+  ]
+}
