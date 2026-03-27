@@ -66,6 +66,7 @@ services:
   # starts, so gunicorn never serves a broken schema.  This also enables
   # rollback: revert the image tag and re-run the migrate container.
   migrate:
+    build: .
     image: ${DOCKER_IMAGE:-dukon-backend}:${IMAGE_TAG:-latest}
     restart: "no"
     env_file: .env
@@ -90,6 +91,7 @@ services:
       - backend
 
   web:
+    build: .
     image: ${DOCKER_IMAGE:-dukon-backend}:${IMAGE_TAG:-latest}
     restart: always
     env_file: .env
@@ -135,6 +137,7 @@ services:
         max-file: "5"
 
   celery:
+    build: .
     image: ${DOCKER_IMAGE:-dukon-backend}:${IMAGE_TAG:-latest}
     restart: always
     env_file: .env
@@ -167,6 +170,7 @@ services:
   # DEVOPS FIX #5: celery-beat was missing from production — periodic tasks
   # (expired code cleanup, tariff reminders, etc.) never ran.
   celery-beat:
+    build: .
     image: ${DOCKER_IMAGE:-dukon-backend}:${IMAGE_TAG:-latest}
     restart: always
     env_file: .env
