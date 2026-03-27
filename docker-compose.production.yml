@@ -69,6 +69,10 @@ services:
     build: .
     image: ${DOCKER_IMAGE:-dukon-backend}:${IMAGE_TAG:-latest}
     restart: "no"
+    # Run as root so `cp` can write into the static_data volume.
+    # This is a one-shot init container, not a long-running service,
+    # so running as root here is acceptable.
+    user: root
     env_file: .env
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.production
