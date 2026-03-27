@@ -174,7 +174,13 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings.production
       DB_HOST: db
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-    command: celery -A config beat -l warning --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    # FIX (celery-beat PermissionError on 'celerybeat-schedule'):
+    # Even with DatabaseScheduler, celery-beat still creates a local
+    # 'celerybeat-schedule' file in the working directory for its internal
+    # state. The container runs as a non-root user so the app directory
+    # is read-only → PermissionError → Restarting loop.
+    # Fix: redirect the schedule file to /tmp which is always writable.
+    command: celery -A config beat -l warning --scheduler django_celery_beat.schedulers:DatabaseScheduler --schedule=/tmp/celerybeat-schedule
     depends_on:
       db:
         condition: service_healthy
